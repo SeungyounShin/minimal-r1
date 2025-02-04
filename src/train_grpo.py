@@ -30,6 +30,8 @@ from transformers.utils import is_peft_available
 from transformers.integrations.deepspeed import is_deepspeed_zero3_enabled
 from transformers.utils import logging
 from collections import defaultdict
+import yaml
+import os
 
 if is_peft_available():
     from peft import PeftConfig, get_peft_model
@@ -179,15 +181,46 @@ def generate_model_card(
     return "\n".join(content)
 
 def main(args):
-    # 1) Initialize Accelerator
-    MODEL_NAME = args.model_name
-    VLLM_SERVER_URL = args.vllm_server_url
-    REF_MODEL_API_URL = args.ref_model_api_url
-    SYSTEM_PROMPT = args.system_prompt
-
+    # 获取项目根目录
+    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    # 加载配置
+    with open(args.config, 'r') as f:
+        config = yaml.safe_load(f)
+    
+    # 获取模型配置
+    model_config = config['models']
+    model_path = model_config['train']['path']
+    
+    # 处理输出路径（相对路径转绝对路径）
+    output_path = os.path.join(project_root, model_config['output']['path'])
+    checkpoint_dir = os.path.join(output_path, model_config['output']['checkpoint_dir'])
+    log_dir = os.path.join(output_path, model_config['output']['log_dir'])
+    
+    # 创建必要的目录
+    os.makedirs(checkpoint_dir, exist_ok=True)
+    os.makedirs(log_dir, exist_ok=True)
+    
+    # 初始化accelerator
     accelerator = Accelerator()
-    local_rank = accelerator.local_process_index
-    device = accelerator.device
+    
+    # 加载模型
+    policy_model = AutoModelForCausalLM.from_pretrained(
+        model_path,
+        trust_remote_code=True,
+        torch_dtype=getattr(torch, args.torch_dtype)
+    )
+    
+    # 加载tokenizer
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_path,
+        trust_remote_code=True,
+        padding_side="left"
+    )
+    
+    # 加载数据集
+    dataset = load_dataset(args.dataset_name, split="train")
+    train_dataloader = DataLoader(dataset, batch_size=args.batch_size, shuffle=True)
 
     # Training parameters
     per_device_train_batch_size = args.batch_size
@@ -202,31 +235,6 @@ def main(args):
     gradient_accumulation_steps = accelerator.deepspeed_plugin.gradient_accumulation_steps
     num_gpus = accelerator.num_processes
 
-    # 2) Dataset loading
-    dataset = load_dataset(args.dataset_name, split="train")
-    train_dataloader = DataLoader(dataset, batch_size=per_device_train_batch_size, shuffle=True)
-
-    # 3) Model & tokenizer loading
-    tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-
-    # Model initialization with proper dtype handling
-    model_init_kwargs = getattr(args, "model_init_kwargs", {}) or {}
-    torch_dtype = model_init_kwargs.get("torch_dtype", None)
-    if isinstance(torch_dtype, str):
-        torch_dtype = getattr(torch, torch_dtype)
-        model_init_kwargs["torch_dtype"] = torch_dtype
-    
-    # Disable caching if gradient checkpointing is enabled
-    model_init_kwargs["use_cache"] = False if args.gradient_checkpointing else model_init_kwargs.get("use_cache")
-    
-    policy_model = AutoModelForCausalLM.from_pretrained(
-        MODEL_NAME,
-        **model_init_kwargs,
-        trust_remote_code=True,
-    )
-
     # Optional PEFT configuration
     peft_config = getattr(args, "peft_config", None)
     if peft_config is not None and is_peft_available():
@@ -237,7 +245,7 @@ def main(args):
 
     # Initialize reference model
     if is_deepspeed_zero3_enabled():
-        ref_model = AutoModelForCausalLM.from_pretrained(MODEL_NAME, **model_init_kwargs)
+        ref_model = AutoModelForCausalLM.from_pretrained(model_path)
     elif peft_config is None:
         ref_model = create_reference_model(policy_model)
     else:
@@ -266,7 +274,7 @@ def main(args):
             vllm_device = f"cuda:{accelerator.num_processes}"  # Use next available GPU
             try:
                 llm = LLM(
-                    model=MODEL_NAME,
+                    model=model_path,
                     device=vllm_device,
                     gpu_memory_utilization=0.9,
                     enable_prefix_caching=True,
@@ -293,9 +301,9 @@ def main(args):
                 "num_gen": num_gen,
                 "max_tokens": max_tokens,
                 "beta": beta,
-                "model_name": MODEL_NAME,
+                "model_name": model_path,
                 "dataset_name": args.dataset_name,
-                "system_prompt": SYSTEM_PROMPT,
+                "system_prompt": args.system_prompt,
                 "peft_config": str(peft_config) if peft_config else None,
             },
         )
@@ -310,7 +318,7 @@ def main(args):
 
             batch_size = len(batch["problem"])
             prompts : list[str] = batch["problem"]
-            prompts = [[{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": prompt}] for prompt in prompts]
+            prompts = [[{"role": "system", "content": args.system_prompt}, {"role": "user", "content": prompt}] for prompt in prompts]
             prompts = [tokenizer.apply_chat_template(prompt, tokenize=False, add_generation_prompt=True) for prompt in prompts]
 
             all_prompts : list[str] = gather_object(prompts)
@@ -323,7 +331,7 @@ def main(args):
                     generations = [[out.text for out in completions.outputs] for completions in outputs]
                 else:
                     generation_start_time = time.time()
-                    generations = get_generation_from_vllm(all_prompts, num_gen=num_gen, max_tokens=max_tokens, vllm_server_url=VLLM_SERVER_URL)
+                    generations = get_generation_from_vllm(all_prompts, num_gen=num_gen, max_tokens=max_tokens, vllm_server_url=args.vllm_server_url)
                     generation_end_time = time.time()
                     _metrics["generation_time"].append(generation_end_time - generation_start_time)
             
@@ -407,7 +415,7 @@ def main(args):
                         torch.save(full_state_dict, buffer)
                         buffer.seek(0)
                         try:
-                            r = requests.post(f"{VLLM_SERVER_URL}/load_weights", data=buffer.read(), timeout=500)
+                            r = requests.post(f"{args.vllm_server_url}/load_weights", data=buffer.read(), timeout=500)
                             r.raise_for_status()
                         except requests.exceptions.RequestException as e:
                             print(f"[ERROR] Failed to load weights to vLLM: {e}")
@@ -464,7 +472,7 @@ if __name__ == "__main__":
     parser.add_argument("--logging_steps", type=int, default=10)
     
     # Model and dataset configuration
-    parser.add_argument("--model_name", type=str, required=True)
+    parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--dataset_name", type=str, required=True)
     parser.add_argument("--system_prompt", type=str, default="You are a helpful math assistant.")
     parser.add_argument("--gradient_checkpointing", action="store_true", help="Enable gradient checkpointing")

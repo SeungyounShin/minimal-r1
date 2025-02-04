@@ -1,0 +1,83 @@
+# Model Configuration
+model:
+  name: "Qwen/Qwen-32B"  # 模型名称
+  torch_dtype: "bfloat16"
+  trust_remote_code: true
+  use_auth_token: true    # 如果需要HF token
+
+# Training Configuration
+training:
+  batch_size: 4
+  gradient_accumulation_steps: 16  # 实际batch_size = 4 * 16 = 64
+  epochs: 3
+  learning_rate: 1e-5
+  beta: 0.1  # KL penalty coefficient
+  max_grad_norm: 1.0
+  warmup_steps: 100
+  logging_steps: 10
+  save_steps: 500
+  eval_steps: 200
+  max_tokens: 512
+  num_gen: 4  # 每个prompt生成的数量
+
+# Distributed Training Configuration
+distributed:
+  # 训练节点 (16 GPUs across 2 nodes)
+  training_nodes:
+    - node1: "gpu007"  # 主训练节点
+      gpu_ids: "0,1,2,3,4,5,6,7"
+      master_port: 29500
+      master: true
+    - node2: "gpu005"  # 从训练节点
+      gpu_ids: "0,1,2,3,4,5,6,7"
+      master_port: 29500
+
+  # Reference Model Node (8 GPUs)
+  reference_node:
+    hostname: "gpu008"
+    gpu_ids: "0,1,2,3,4,5,6,7"
+    master_port: 29501
+    api_port: 8001
+
+  # Generation Model Node (8 GPUs)
+  generation_node:
+    hostname: "gpu004"
+    gpu_ids: "0,1,2,3,4,5,6,7"
+    master_port: 29502
+    api_port: 8000
+
+# vLLM Configuration
+vllm:
+  tensor_parallel_size: 8  # 使用整个node的8卡
+  gpu_memory_utilization: 0.90
+  max_num_batched_tokens: 8192
+  max_num_seqs: 256
+  enable_prefix_caching: true
+  temperature: 0.6
+  top_p: 0.95
+
+# Accelerate Configuration
+accelerate:
+  mixed_precision: "bf16"
+  gradient_accumulation_steps: 16
+  gradient_clipping: 1.0
+  split_batches: true
+  project_dir: "."
+  log_with: "wandb"
+  dynamo_backend: "no"
+
+# Dataset Configuration
+dataset:
+  name: "your_dataset_name"
+  train_split: "train"
+  eval_split: "validation"
+  max_length: 2048
+  num_proc: 8
+
+# Logging Configuration
+logging:
+  wandb:
+    project: "grpo_32b"
+    name: "grpo_32b_run"
+    entity: "your_team"
+  log_examples: true

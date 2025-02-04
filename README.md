@@ -52,3 +52,92 @@ Below is a pie chart visualizing the **overall time distribution across all step
 As seen in the chart, the **generation step dominates the overall runtime, accounting for 71.0% of the time**. Given this, allocating more GPUs to the generation process could potentially improve efficiency and reduce the bottleneck. This adjustment may lead to faster training and better resource utilization, especially when handling long-form generation tasks.
 
 ---
+
+# xDAN-RLAIF-GRPO
+
+使用GRPO (Generative Reward Proximal Optimization)训练大语言模型的分布式训练框架。
+
+## 特点
+
+- 分布式训练支持（DeepSpeed + Accelerate）
+- 多GPU张量并行推理（vLLM）
+- 完整的训练、生成和评估流程
+- 灵活的配置系统
+
+## 系统要求
+
+- Python 3.8+
+- CUDA 11.7+
+- 至少3个GPU节点（训练、生成、参考）
+
+## 快速开始
+
+1. 配置节点（编辑`config/nodes.yaml`）：
+```yaml
+training:
+  master_node: "gpu007"
+  services:
+    generation:
+      url: "http://gpu004:8000"
+    reference:
+      url: "http://gpu008:8001"
+```
+
+2. 启动服务：
+```bash
+# 在gpu004上启动vLLM生成服务
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python src/launch_vllm.py \
+    --model_path /path/to/model \
+    --port 8000 \
+    --tensor_parallel_size 8
+
+# 在gpu008上启动参考模型服务
+CUDA_VISIBLE_DEVICES=0,1,2,3,4,5,6,7 python src/launch_ref_model.py \
+    --model_path /path/to/model \
+    --port 8001 \
+    --tensor_parallel_size 8
+```
+
+3. 启动训练：
+```bash
+./scripts/launch_distributed.sh
+```
+
+## 目录结构
+
+```
+项目根目录/
+├── config/
+│   ├── nodes.yaml      # 节点和模型配置
+│   ├── hostfile        # DeepSpeed训练节点配置
+│   └── accelerate_config.yaml  # Accelerate配置
+├── src/
+│   ├── train_grpo.py   # 训练主脚本
+│   ├── launch_vllm.py  # vLLM服务启动脚本
+│   └── launch_ref_model.py  # 参考模型服务启动脚本
+├── scripts/
+│   ├── launch_distributed.sh  # 分布式训练启动脚本
+│   └── launch_training.sh     # 训练启动脚本
+└── output/             # 训练输出目录
+    ├── checkpoints/   # 模型检查点
+    └── logs/         # 训练日志
+```
+
+## 训练配置
+
+主要训练参数（在`launch_training.sh`中配置）：
+- `--dataset_name`: 训练数据集名称
+- `--epochs`: 训练轮数
+- `--batch_size`: 批次大小
+- `--lr`: 学习率
+- `--beta`: KL惩罚系数
+- `--temperature`: 采样温度
+- `--num_gen`: 每个prompt生成的样本数
+- `--max_tokens`: 最大生成长度
+
+## 注意事项
+
+1. 确保所有节点都能相互访问
+2. 确保模型路径在所有节点上都存在
+3. 确保所有节点的CUDA环境正确配置
+4. 使用相对路径进行输出，便于跨节点共享

@@ -1,0 +1,25 @@
+# 训练节点配置
+training:
+  master_node: "gpu007"  # 主训练节点
+  master_port: 29500     # 主节点端口
+  # 服务节点配置
+  services:
+    generation:
+      node: "gpu004"     # 生成服务节点
+      port: 8000         # 生成服务端口
+      url: "http://gpu004:8000"  # 生成服务URL
+    reference:
+      node: "gpu008"     # 参考模型节点
+      port: 8001         # 参考模型端口
+      url: "http://gpu008:8001"  # 参考模型URL
+
+# 模型配置
+models:
+  base_path: "/data/vayu/train/models"  # 模型基础路径
+  train:
+    name: "xDAN-L1-Qwen25-7B-Instruct"  # 训练使用的模型名称
+    path: "/data/vayu/train/models/xDAN-L1-Qwen25-7B-Instruct"  # 完整路径
+  output:
+    path: "output"  # 相对于项目根目录的输出路径
+    checkpoint_dir: "checkpoints"  # checkpoint保存目录
+    log_dir: "logs"  # 日志目录

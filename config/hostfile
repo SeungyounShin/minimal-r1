@@ -1,0 +1,4 @@
+# 训练节点配置
+# 格式: hostname slots=num_gpus
+gpu007 slots=8  # 主节点
+gpu005 slots=8  # worker节点

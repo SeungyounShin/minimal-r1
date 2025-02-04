@@ -22,6 +22,7 @@ import uvicorn
 # 설정
 parser = argparse.ArgumentParser(description="Launch ref_model as an API server.")
 parser.add_argument("--model_name", type=str, default="Seungyoun/Qwen2.5-7B-Open-R1-Distill", help="Model name")
+parser.add_argument("--tensor_parallel_size", type=int, default=8, help="Number of GPUs to use")
 args = parser.parse_args()
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -88,4 +89,3 @@ async def compute_logprob(request: LogProbRequest):
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8001)
-
